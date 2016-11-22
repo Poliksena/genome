@@ -620,7 +620,7 @@ void GSMain( point VSOutput inputPoint[1], inout TriangleStream<GSOutput> output
 
 		//float factor = saturate(prt.LifeTime / prt.TotalLifeTime);
 
-	float sz				=  prt.Size0 / 2;		
+	float sz				=  prt.Size0;		
 	float time				= prt.LifeTime;
 	float4 pos				=	float4( prt.Position.xyz, 1 );
 	float4 posV				=	mul( pos, Params.View );
@@ -628,25 +628,25 @@ void GSMain( point VSOutput inputPoint[1], inout TriangleStream<GSOutput> output
 	float texRight	= prt.ColorType;
 	float texLeft	= texRight - 0.1f;
 
-	p0.Position = mul( posV + float4( sz, sz, 0, 0 ) , Params.Projection );
+	p0.Position = mul( posV + float4( -sz/2, -sz*sqrt(3)/6, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p0.TexCoord = float2(0, 0);
 	p0.Color = prt.Color0;
 	p0.SecondTex = float2(0,0);
 	p0.IconCoord = float2(texLeft,0);
 
-	p1.Position = mul( posV + float4( -sz, sz, 0, 0 ) , Params.Projection );
+	p1.Position = mul( posV + float4( 0, sz*sqrt(3)/3, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p1.TexCoord = float2(1, 0);
 	p1.Color = prt.Color0;
 	p1.SecondTex = float2(0,0);
 	p1.IconCoord = float2(texRight,0);
 
-	p2.Position = mul( posV + float4( -sz, -sz, 0, 0 ) , Params.Projection );
+	p2.Position = mul( posV + float4(  sz/2, -sz*sqrt(3)/6, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p2.TexCoord = float2(1, 1);
 	p2.Color = prt.Color0;
 	p2.SecondTex = float2(0,0);
 	p2.IconCoord = float2(texRight,1);
 
-	p3.Position = mul( posV + float4( sz, -sz, 0, 0 ) , Params.Projection );
+	p3.Position = mul( posV + float4(  0, 0, sz*sqrt(3)/3, 0 ) , Params.Projection );
 	p3.TexCoord = float2(0, 1);
 	p3.Color = prt.Color0;
 	p3.SecondTex = float2(0,0);
@@ -661,6 +661,16 @@ void GSMain( point VSOutput inputPoint[1], inout TriangleStream<GSOutput> output
 	outputStream.Append(p2);
 	outputStream.Append(p3);
 	outputStream.RestartStrip();
+	
+	outputStream.Append(p0);
+	outputStream.Append(p1);
+	outputStream.Append(p3);
+	outputStream.RestartStrip( );
+	
+	outputStream.Append(p1);
+	outputStream.Append(p2);
+	outputStream.Append(p3);
+	outputStream.RestartStrip( );
 }
 #endif
 
