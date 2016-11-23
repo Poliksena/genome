@@ -7,10 +7,8 @@
 //
 // Name                 Index   Mask Register SysValue Format   Used
 // -------------------- ----- ------ -------- -------- ------ ------
-// SV_Position              0   xyzw        0      POS  float       
-// TEXCOORD                 0   xy          1     NONE  float       
-// COLOR                    0   xyzw        2     NONE  float   xyzw
-// TEXCOORD                 1   xyz         3     NONE  float       
+// SV_POSITION              0   xyzw        0      POS  float       
+// POSITION                 0   xyzw        1     NONE  float       
 //
 //
 // Output signature:
@@ -21,9 +19,8 @@
 //
 </font><font color = "#e0e0e0">ps_5_0
 <font color = "#ffff40">dcl_globalFlags</font> refactoringAllowed
-<font color = "#ffff40">dcl_input_ps</font> linear v2.xyzw
 <font color = "#ffff40">dcl_output</font> o0.xyzw
-<!-- id=0 --><font color = "#ffff40">mov</font> o0.xyzw, v2.xyzw
+<!-- id=0 --><font color = "#ffff40">mov</font> o0.xyzw, l<font color = "#00ffff">(1.000000,1.000000,1.000000,1.000000)</font>
 <!-- id=1 --><font color = "#ffff40">ret</font> 
 </font><font color = "#a0a0a0">// Approximately 2 instruction slots used
 </font></pre>

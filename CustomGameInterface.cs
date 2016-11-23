@@ -157,8 +157,6 @@ namespace SignalingSample
 			string path = @"Data/Hela_sonic_LMNA_interactions_diploid_10071362_iter_final.csv";
 			Dictionary<int, Graph.Vertice> allVertices = new Dictionary<int, Graph.Vertice>();
 			List<Graph.Link> allEdges = new List<Graph.Link>();
-			//proteins = new List<Protein>();
-			//interactions = new List<Interaction>();
 
 			var lines = File.ReadAllLines(path);
             var index = 0;
@@ -172,21 +170,12 @@ namespace SignalingSample
 				{
                     int zone = 2;							
 
-		/*			proteins.Add(
-						new Protein()
-						{
-							Name = info[0],
-							ID = id,
-							Location = zone,
-						}
-					); */
-
                     Graph.Vertice node = new Graph.Vertice()
                     {
-                        Position = new Vector3(float.Parse(info[1]), float.Parse(info[2]), float.Parse(info[3])) * 1000,//gcConfig.LinkSize,
+						Position = new Vector3(float.Parse(info[1]), float.Parse(info[2]), float.Parse(info[3])) * 1000,//gcConfig.LinkSize,
 						Velocity = Vector3.Zero,
 						Color = ColorConstant.paletteByGroup.ElementAt(zone).ToVector4(),
-						Size = float.Parse(info[4])*30,
+						Size = float.Parse(info[4])*1000,
 						Acceleration = Vector3.Zero,
 						Mass = 0,
 						Information = 1,
@@ -199,9 +188,6 @@ namespace SignalingSample
 
 					allVertices.Add(id, node);
 				}
-
-				 
-				
 			}
             try
             {
@@ -254,22 +240,6 @@ namespace SignalingSample
 			viewLayer.GraphLayers.Add(graph);
 		}
 
-	//	List<Protein> proteins;
-		//List<Interaction> interactions;
-		/*public struct Protein
-		{
-			public int ID;
-			public string Name;
-			public int Location;			
-		} */
-
-		/*public struct Interaction
-		{
-			public int SourceID;
-			public int StockID;
-			public int InteractionType;
-		}*/
-
 		void LoadContent()
 		{
 
@@ -292,7 +262,7 @@ namespace SignalingSample
 
 			if (e.Key == Keys.LeftButton)
 			{
-				graph.Helper.NodeSelection();
+				//graph.Helper.NodeSelection();
 			}
 		}
 
@@ -330,30 +300,7 @@ namespace SignalingSample
 			//mouseDelta = Game.Mouse.Position - prevMousePos;
 			//prevMousePos = Game.Mouse.Position;
 
-			//новая итерация каждые seconds секунд, при условии, что граф не на паузе и итераций прошло меньше 1000
-			/*tt += gameTime.ElapsedSec;
-			if (tt > seconds)
-			{
-				tt = tt - seconds;
-				counter++;
-				if (graph.state == State.RUN && counter < 1000)
-				{
-					for(int i = 0; i < graph.ParticleList.Count; i++)
-					{
-						var node = graph.ParticleList[i];
-						//node.Information *= -1;
-						graph.ParticleList[i] = node;
-					}
-					graph.createLinksFromFile(counter);
-					Log.Message("Iteration!");
-				}
-			}*/
-
 		}
-
-		private int counter = 0;
-		private float tt = 0;
-		private float seconds = 10;
 
 		/// <summary>
 		/// 

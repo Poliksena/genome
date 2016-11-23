@@ -1,7 +1,5 @@
 
 #if 0
-$ubershader DYNAMIC INJECTION|SIMULATION|MOVE EULER|RUNGE_KUTTA|COLOR
-$ubershader STATIC INJECTION|MOVE|REDUCTION|(SIMULATION EULER|RUNGE_KUTTA)|LOCAL
 $ubershader DRAW POINT|LINE
 #endif
 
@@ -92,485 +90,6 @@ cbuffer CB1 : register(c0) {
 -----------------------------------------------------------------------------*/
 
 
-
-
-#ifdef STATIC
-
-groupshared float4 shPositions[BLOCK_SIZE];
-groupshared float4 sh_energy[BLOCK_SIZE];
-
-
-inline float4 pairBodyForce( float4 thisPos, float4 otherPos ) // 4th component is charge
-{
-	float3 R			= (otherPos - thisPos).xyz;		
-	float Rsquared		= R.x * R.x + R.y * R.y + R.z * R.z + 0.1f;
-	float Rsixth		= Rsquared * Rsquared * Rsquared;
-	float invRCubed		= - otherPos.w / sqrt( Rsixth );	// we will multiply by constants later
-	float energy		=   otherPos.w / sqrt( Rsquared );	// we will multiply by constants later
-	return float4( mul( invRCubed, R ), energy ); // we write energy into the 4th component
-}
-
-
-
-float4 springForce( float4 pos, float4 otherPos ) // 4th component in otherPos is link length
-												  // 4th component in pos is link strength
-{
-	float3 R			= (otherPos - pos).xyz;
-	float Rabs			= length( R ) + 0.1f;
-	float deltaR		= Rabs - otherPos.w;
-	float absForce		= pos.w * ( deltaR ) / ( Rabs );
-	float energy		= 0.5f * pos.w * deltaR * deltaR;
-	return float4( mul( absForce, R ), energy ) * 0.0005f;  // we write energy into the 4th component
-}
-
-
-float4 tileForce( float4 position, uint threadId )
-{
-	float4 force = float4(0, 0, 0, 0);
-	float4 otherPosition = float4(0, 0, 0, 0);
-	for ( uint i = 0; i < BLOCK_SIZE; ++i )
-	{
-		otherPosition = shPositions[i];
-		force += pairBodyForce( position, otherPosition );
-	}
-	return force;
-}
-
-float4 calcRepulsionForce( float4 position, uint3 groupThreadID )
-{
-	float4 force = float4(0, 0, 0, 0);
-	uint tile = 0;
-	for ( uint i = 0; i < Params.MaxParticles; i+= BLOCK_SIZE, tile += 1 )
-	{
-		uint srcId = tile*BLOCK_SIZE + groupThreadID.x;
-		PARTICLE3D p = particleBufferSrc[srcId];
-		float4 pos = float4( p.Position, p.Charge );
-		shPositions[groupThreadID.x] = pos;
-		
-		GroupMemoryBarrierWithGroupSync();
-		
-		force += tileForce( position, groupThreadID.x );
-
-		GroupMemoryBarrierWithGroupSync();
-	}
-	return force;
-}
-
-
-float4 calcLinksForce( float4 pos, uint id, uint linkListStart, uint linkCount )
-{
-	float4 force = float4( 0, 0, 0, 0 );
-	PARTICLE3D otherP;
-	[allow_uav_condition] for ( uint i = 0; i < linkCount; ++i )
-	{
-		Link link = linksBuffer[linksPtrBuffer[linkListStart + i].id];
-		uint otherId = link.par1;
-		if ( id == otherId )
-		{
-			otherId = link.par2;
-		}
-		otherP = particleBufferSrc[otherId];
-		float4 otherPos = float4( otherP.Position, link.length );
-		pos.w = link.weight; //1.0f;//
-		force += springForce( pos, otherPos );
-	}
-	return force;
-}
-
-
-#ifdef SIMULATION
-[numthreads( BLOCK_SIZE, 1, 1 )]
-void CSMain( 
-	uint3 groupID			: SV_GroupID,
-	uint3 groupThreadID 	: SV_GroupThreadID, 
-	uint3 dispatchThreadID 	: SV_DispatchThreadID,
-	uint  groupIndex 		: SV_GroupIndex
-)
-{
-	uint id = groupID.x*BLOCK_SIZE + groupThreadID.x;
-	
-	PARTICLE3D p = particleBufferSrc[id];
-	float4 pos = float4 ( p.Position, p.Charge );
-	float4 force = float4( 0, 0, 0, 0 );
-
-#ifdef EULER
-	force = mul( calcRepulsionForce( pos, groupThreadID ), 100000.0f * pos.w ); // we multiply by all the constants here once
-
-	force += calcLinksForce ( pos, id, p.LinksPtr, p.LinksCount );
-
-#endif // EULER
-
-
-
-#ifdef RUNGE_KUTTA
-	force = float4( 0, 0, 0, 0 ); // just a placeholder
-#endif // RUNGE_KUTTA
-
-	// add potential well:
-//	force.xyz += mul( 0.00005f*length(pos.xyz), -pos.xyz );
-//	float3 accel = force.xyz;
-
-	float invMass = 1 / Params.Mass;
-	float3 acc = float3(0,0,0);
-	acc += mul( force, invMass );
-	p.Acceleration = acc;
-	p.Force		= force.xyz;
-	p.Energy	= force.w;
-	particleBufferSrc[id] = p;
-}
-
-#endif // SIMULATION
-
-
-#ifdef LOCAL
-[numthreads( BLOCK_SIZE, 1, 1 )]
-void CSMain( 
-	uint3 groupID			: SV_GroupID,
-	uint3 groupThreadID 	: SV_GroupThreadID, 
-	uint3 dispatchThreadID 	: SV_DispatchThreadID,
-	uint  groupIndex 		: SV_GroupIndex
-)
-{
-	int numberOfVertices = Params.EndIndex - Params.StartIndex;
-	if( dispatchThreadID.x < numberOfVertices )
-	{
-		uint id = dispatchThreadID.x;
-		PARTICLE3D prt = particleBufferSrc[id];
-
-		float4 force = float4(0,0,0,0);
-
-		float Radius = 400;
-
-		float3 R = prt.Position - float3(0,0,0);
-		float Rabs = length(R) + 0.01f;
-
-		float diff = Radius - Rabs;
-
-		float factor = 0.003f;
-
-		force.xyz += mul(R, factor*diff/Rabs);
-		float invMass = 1 / Params.Mass;
-		float3 acc = float3(0,0,0);
-		acc += mul( force, invMass );
-		prt.Acceleration = acc;
-		prt.Force += force.xyz;
-		prt.Energy += force.w;
-		particleBufferSrc[id] = prt;
-	}
-}
-
-#endif // LOCAL
-
-
-#ifdef MOVE
-[numthreads( BLOCK_SIZE, 1, 1 )]
-void CSMain( 
-	uint3 groupID			: SV_GroupID,
-	uint3 groupThreadID 	: SV_GroupThreadID, 
-	uint3 dispatchThreadID 	: SV_DispatchThreadID,
-	uint  groupIndex 		: SV_GroupIndex
-)
-{
-	uint id = dispatchThreadID.x;
-
-	if (id < Params.MaxParticles) {
-		PARTICLE3D p = particleBufferSrc[ id ]; //PARTICLE3D p = particleReadBuffer[ id ];
-		//p.Position.xyz += mul( p.Force, Params.DeltaTime );
-		p.Position.xyz += mul( p.Velocity, Params.DeltaTime );
-		p.Velocity += mul( p.Acceleration, Params.DeltaTime );
-		particleBufferSrc[ id ] = p;
-	}
-
-}
-#endif // MOVE
-
-
-
-#ifdef REDUCTION
-
-[numthreads( HALF_BLOCK, 1, 1 )]
-void CSMain( 
-	uint3 groupID			: SV_GroupID,
-	uint3 groupThreadID 	: SV_GroupThreadID, 
-	uint3 dispatchThreadID 	: SV_DispatchThreadID,
-	uint  groupIndex 		: SV_GroupIndex
-)
-{
-//	int id = dispatchThreadID.x;
-	int id = groupID.x*BLOCK_SIZE + groupIndex;
-
-	// load data into shared memory:
-	PARTICLE3D p1curr = particleReadBuffer[ id ];
-	PARTICLE3D p2curr = particleReadBuffer[ id + HALF_BLOCK ];
-
-	PARTICLE3D p1next = particleReadBuffer2[ id ];
-	PARTICLE3D p2next = particleReadBuffer2[ id + HALF_BLOCK ];
-
-	float energy1 = p1next.Energy;
-	float energy2 = p2next.Energy;
-
-	float mass	= p1next.Mass + p2next.Mass;
-
-	float dotPr1 = - (p1curr.Force.x*p1next.Force.x + p1curr.Force.y*p1next.Force.y + p1curr.Force.z*p1next.Force.z);
-	float dotPr2 = - (p2curr.Force.x*p2next.Force.x + p2curr.Force.y*p2next.Force.y + p2curr.Force.z*p2next.Force.z);
-
-	sh_energy[groupIndex] = float4( energy1 + energy2, dotPr1 + dotPr2, mass, 0 );
-	GroupMemoryBarrierWithGroupSync();
-
-	// full unroll:
-	if ( HALF_BLOCK >= 512 )
-	{
-		if ( groupIndex < 256 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 256];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 256 )
-	{
-		if ( groupIndex < 128 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 128];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 128 )
-	{
-		if ( groupIndex < 64 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 64];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 64 )
-	{
-		if ( groupIndex < 32 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 32];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 32 )
-	{
-		if ( groupIndex < 16 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 16];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 16 )
-	{
-		if ( groupIndex < 8 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 8];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 8 )
-	{
-		if ( groupIndex < 4 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 4];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 4 )
-	{
-		if ( groupIndex < 2 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 2];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if ( HALF_BLOCK >= 2 )
-	{
-		if ( groupIndex < 1 ) {sh_energy[groupIndex] += sh_energy[groupIndex + 1];}
-		GroupMemoryBarrierWithGroupSync();
-	}
-
-	if( groupIndex == 0 )
-	{
-		energyRWBuffer[groupID.x] = sh_energy[0];
-	}
-}
-
-#endif // REDUCTION
-
-
-#endif // STATIC
-
-
-#ifdef DYNAMIC
-
-struct BodyState
-{
-	float3 Position;
-	float3 Velocity;
-	float3 Acceleration;
-	uint id;
-};
-
-
-struct Derivative
-{
-	float3 dxdt;
-	float3 dvdt;
-};
-
-
-
-float3 SpringForce( in float3 bodyState, in float3 otherBodyState, float linkLength, float charge1, float charge2, float linkActivity )
-{
-	float3 R			= otherBodyState - bodyState;	
-	float Rabs			= length( R ) + 0.5f;  			  	
-	float absForce		= 0.1f * ( Rabs - linkLength ) / ( Rabs );		  		
-	return mul( Rabs, R * 0.01f )  * 0.001f  * pow(linkActivity, 2);//mul( Rabs, tangForce * 0.000001f )  * 0.0000005f   ;//* (charge2 + 1)
-}
-
-
-float3 RepulsionForce( in float3 bodyState, in float3 otherBodyState, float charge1, float charge2)
-{
-	float3 R			= (otherBodyState  - bodyState ) ;			
-	float Rsquared		= R.x * R.x + R.y * R.y + R.z * R.z + 0.001f;	
-	float Rsixth		= Rsquared * Rsquared * Rsquared;
-	float invRCubed		=  -1000.0f / sqrt( Rsixth );
-	return mul( invRCubed, R ) * 1000 * (charge1 + 1) * (charge2 + 1) ;// / pow(group2 + 2, 3.0f) ; +  normalize( forceCentr) * bodySize / 2
-}
-
-
-
-float3 Acceleration( in PARTICLE3D prt, in int totalNum, in int particleId  )
-{
-	float3 acc = {0,0,0};
-	float3 deltaForce = {0, 0, 0};
-	float invMass = 1 / Params.Mass;
-
-	PARTICLE3D other;
-	[allow_uav_condition] for ( int lNum = 0; lNum < prt.Count; ++ lNum ) {
-		int otherId = linksBuffer[linksPtrBuffer[prt.LinksPtr + lNum].id].par1;
-
-		if ( otherId == particleId ) {
-			otherId = linksBuffer[linksPtrBuffer[prt.LinksPtr + lNum].id].par2;
-		}
-
-		other = particleBufferSrc[otherId];
-		Link link = linksBuffer[linksPtrBuffer[prt.LinksPtr + lNum].id];
-		float activity = link.LifeTime / link.TotalLifeTime;
-		if (activity < 0.02f){
-			activity = 0.02f;
-		}
-		deltaForce += SpringForce( prt.Position, other.Position, link.length, prt.LinksCount, other.LinksCount, activity);
-	}
-	
-	[allow_uav_condition] for ( int i = 0; i < totalNum; ++i ) {
-		other = particleBufferSrc[ i ];
-		float dist = length (prt.Position - other.Position);
-		if(dist <= (prt.Size0 + other.Size0) * 10){
-			
-			//if (prt.Group == other.Group){
-				deltaForce += RepulsionForce( prt.Position, other.Position, prt.LinksCount, other.LinksCount ) * 10;
-			//}
-		}
-	}
-	
-	float4 force = float4(0,0,0,0);
-	float Radius = prt.ColorType;
-	if (prt.Charge == 0) Radius = Radius * 1.1f;
-
-	float3 R = prt.Position - float3(0,0,0);
-	float Rabs = length(R) + 0.01f;
-
-	float diff = Radius - Rabs;
-
-	float factor = 200.0f;
-
-	force.xyz += mul(R, factor * diff/Rabs);
-	//p.Force += force.xyz;
-	float n = 55;
-	float alpha = 2 * 3.1415926 / n;
-
-	float3 clusterPoint = float3(0,0,0);
-	
-
-	float3 corVector =  clusterPoint - float3(0, 0, Radius);
-
-	alpha = alpha * (prt.TotalLifeTime - 1);
-	corVector = mul(corVector, float3x3(1, 0, 0,
-												0, cos(alpha), -sin(alpha),
-												0, sin(alpha), cos(alpha)));
-	float cVabs			= length( corVector ) + 0.5f;
-	float4 corForce = float4(0,0,0,0);
-	//corForce.xyz += mul( cVabs, corVector ) * 0.0000001f;
-	
-
-	acc += mul( deltaForce, invMass );
-	acc += mul( force, invMass );
-	acc += mul( corForce, invMass );
-	acc -= mul ( prt.Velocity, 50.0f );
-
-	return acc;
-}
-
-
-
-
-void IntegrateEUL_SHARED( inout BodyState state, in uint numParticles )
-{	
-	state.Acceleration	= Acceleration( particleBufferSrc[state.id], numParticles, state.id );
-}
-
-
-
-[numthreads( BLOCK_SIZE, 1, 1 )]
-void CSMain( 
-	uint3 groupID			: SV_GroupID,
-	uint3 groupThreadID 	: SV_GroupThreadID, 
-	uint3 dispatchThreadID 	: SV_DispatchThreadID,
-	uint  groupIndex 		: SV_GroupIndex
-)
-{
-	int id = dispatchThreadID.x;
-
-#ifdef INJECTION
-	if (id < Params.MaxParticles) {
-		PARTICLE3D p = particleBufferSrc[id];
-		particleBufferSrc[id] = p;
-	}
-#endif
-
-#ifdef SIMULATION
-	if (id < Params.MaxParticles) {
-		PARTICLE3D p = particleBufferSrc[ id ];		
-
-			uint numParticles	=	0;
-			uint stride			=	0;
-			particleBufferSrc.GetDimensions( numParticles, stride );
-
-			BodyState state;
-			state.Position		=	p.Position;
-			state.Velocity		=	p.Velocity;
-			state.Acceleration	=	p.Acceleration;
-			state.id			=	id;
-
-#ifdef EULER
-
-			IntegrateEUL_SHARED( state, Params.MaxParticles );
-
-#endif
-
-#ifdef RUNGE_KUTTA
-	
-			IntegrateEUL_SHARED( state, Params.MaxParticles );
-
-#endif
-			
-			p.Acceleration = state.Acceleration;		
-			particleBufferSrc[id] = p;
-
-	}
-#endif
-
-#ifdef MOVE
-	if (id < Params.MaxParticles) {
-		PARTICLE3D p = particleBufferSrc[ id ];		
-
-		p.Position.xyz += mul( p.Velocity, Params.DeltaTime );
-		p.Velocity += mul( p.Acceleration, Params.DeltaTime );
-		
-		particleBufferSrc[ id ] = p;
-
-	}
-#endif
-
-}
-#endif
-
-
-
 #ifdef DRAW
 
 struct VSOutput {
@@ -581,8 +100,7 @@ struct GSOutput {
 	float4	Position : SV_Position;
 	float2	TexCoord : TEXCOORD0;
 	float4	Color    : COLOR0;
-	float2	SecondTex: TEXCOORD1;
-	float2	IconCoord: TEXCOORD2;
+	float3	Normal	 : TEXCOORD1;
 };
 
 
@@ -594,31 +112,12 @@ VSOutput VSMain( uint vertexID : SV_VertexID )
 }
 
 
-float Ramp(float f_in, float f_out, float t) 
-{
-	float y = 1;
-	t = saturate(t);
-	
-	float k_in	=	1 / f_in;
-	float k_out	=	-1 / (1-f_out);
-	float b_out =	-k_out;	
-	
-	if (t<f_in)  y = t * k_in;
-	if (t>f_out) y = t * k_out + b_out;
-	
-	
-	return y;
-}
-
-
 #ifdef POINT
-[maxvertexcount(26)]
+[maxvertexcount(12)]
 void GSMain( point VSOutput inputPoint[1], inout TriangleStream<GSOutput> outputStream )
 {
 	GSOutput p0, p1, p2, p3;
 	PARTICLE3D prt = GSResourceBuffer[ inputPoint[0].vertexID ];
-
-		//float factor = saturate(prt.LifeTime / prt.TotalLifeTime);
 
 	float sz				=  prt.Size0;		
 	float time				= prt.LifeTime;
@@ -631,45 +130,73 @@ void GSMain( point VSOutput inputPoint[1], inout TriangleStream<GSOutput> output
 	p0.Position = mul( posV + float4( -sz/2, -sz*sqrt(3)/6, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p0.TexCoord = float2(0, 0);
 	p0.Color = prt.Color0;
-	p0.SecondTex = float2(0,0);
-	p0.IconCoord = float2(texLeft,0);
+
 
 	p1.Position = mul( posV + float4( 0, sz*sqrt(3)/3, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p1.TexCoord = float2(1, 0);
 	p1.Color = prt.Color0;
-	p1.SecondTex = float2(0,0);
-	p1.IconCoord = float2(texRight,0);
+
 
 	p2.Position = mul( posV + float4(  sz/2, -sz*sqrt(3)/6, -sz*sqrt(3)/6, 0 ) , Params.Projection );
 	p2.TexCoord = float2(1, 1);
 	p2.Color = prt.Color0;
-	p2.SecondTex = float2(0,0);
-	p2.IconCoord = float2(texRight,1);
+
 
 	p3.Position = mul( posV + float4(  0, 0, sz*sqrt(3)/3, 0 ) , Params.Projection );
 	p3.TexCoord = float2(0, 1);
 	p3.Color = prt.Color0;
-	p3.SecondTex = float2(0,0);
-	p3.IconCoord = float2(texLeft, 1);
+
+	float4x4	World = float4x4(1, 0, 0, pos.x,
+								 0, 1, 0, pos.y,
+								 0, 0, 1, pos.z,
+								 0, 0, 0, pos.w);
 	
+	float3 normal = -cross(p0.Position - p1.Position, p2.Position - p1.Position);
+	normal = mul(normal, World);
+	normal = normalize(normal);
+	p0.Normal = normal;
+	p1.Normal = normal;
+	p2.Normal = normal;
+
 	outputStream.Append(p0);
 	outputStream.Append(p1);
 	outputStream.Append(p2);
 	outputStream.RestartStrip( );
+
+	normal = -cross(p0.Position - p2.Position, p3.Position - p2.Position);
+	normal = mul(normal, World);
+	normal = normalize(normal);
+	p0.Normal = normal;
+	p2.Normal = normal;
+	p3.Normal = normal;
 	
 	outputStream.Append(p0);
 	outputStream.Append(p2);
 	outputStream.Append(p3);
 	outputStream.RestartStrip();
+
+	normal = -cross(p0.Position - p3.Position, p1.Position - p3.Position);
+	normal = mul(normal, World);
+	normal = normalize(normal);
+	p0.Normal = normal;
+	p1.Normal = normal;
+	p3.Normal = normal;
 	
 	outputStream.Append(p0);
-	outputStream.Append(p1);
 	outputStream.Append(p3);
+	outputStream.Append(p1);
 	outputStream.RestartStrip( );
+
+	normal = cross(p1.Position - p3.Position, p2.Position - p3.Position);
+	normal = mul(normal, World);
+	normal = normalize(normal);
+	p1.Normal = normal;
+	p2.Normal = normal;
+	p3.Normal = normal;
 	
 	outputStream.Append(p1);
-	outputStream.Append(p2);
 	outputStream.Append(p3);
+	outputStream.Append(p2);
 	outputStream.RestartStrip( );
 }
 #endif
@@ -705,15 +232,10 @@ void GSMain( point VSOutput inputLine[1], inout TriangleStream<GSOutput> outputS
 	p3.Color		=	lk.Color;
 	p4.Color		=	lk.Color;
 				
-	p1.IconCoord		=	float2(0, 0);
-	p2.IconCoord		=	float2(0, 0);
-	p3.IconCoord		=	float2(0, 0);
-	p4.IconCoord		=	float2(0, 0);
-	
-	p1.SecondTex		=	float2(0, 0);
-	p2.SecondTex		=	float2(0, 0);
-	p3.SecondTex		=	float2(0, 0);
-	p4.SecondTex		=	float2(0, 0);
+	p1.Normal		=	float3(0, 0, 0);
+	p2.Normal		=	float3(0, 0, 0);
+	p3.Normal		=	float3(0, 0, 0);
+	p4.Normal		=	float3(0, 0, 0);
 				
 	p1.Position = mul( pos1 + float4(side * lk.Width, 0)  /*+ float4(dir * end1.Size0 , 0)*/, Params.Projection ) ;	
 	p2.Position = mul( pos1 - float4(side * lk.Width, 0)  /*+ float4(dir * end1.Size0 , 0)*/, Params.Projection ) ;	
@@ -731,27 +253,18 @@ void GSMain( point VSOutput inputLine[1], inout TriangleStream<GSOutput> outputS
 #ifdef LINE
 float4 PSMain( GSOutput input ) : SV_Target
 {
-	return input.Color;//* Stroke.Sample( Sampler, input.TexCoord ) +  Border.Sample( Sampler, input.TexCoord );
+	return input.Color;
 }
 #endif
 
 #ifdef POINT
 float4 PSMain( GSOutput input ) : SV_Target
 {
-	clip( Texture.Sample( Sampler, input.TexCoord ).a < 0.7f ? -1:1 );
-	clip( input.Color.a < 0.1f ? -1:1 );
-	float4 color = Texture.Sample( Sampler, input.TexCoord ) * input.Color ;
-	if( input.SecondTex.x > 0)
-	{
-		float4 result =	Texture.Sample( Sampler, input.TexCoord );
-		if(result.a > 0)
-		{
-			//return result * float4(0,255,0, 255) / 255;
-			//color =  Stroke.Sample( Sampler, input.IconCoord ) ; //
-		}
-
-	}
-	return color ;//+ float4 (Border.Sample( Sampler, input.TexCoord ).rgb, 0); //input.Color;
+	float3 amb = float3(100,149,237) / 256.0f / 4;
+	float3 sun = float3(255,240,120) / 256.0f * 1;
+	float3 light = (0.2 + 0.8*dot(input.Normal, normalize(float3(2,3,1)))) * sun + amb;
+	return float4(light * input.Color, 1);
+	//return input.Color;
 
 }
 #endif
