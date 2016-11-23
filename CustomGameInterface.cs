@@ -232,7 +232,8 @@ namespace SignalingSample
 			graph.SetGraph(g);
 			graph.cfg.GraphLayout = @"Graph/Signaling";
 			graph.Initialize();
-			graph.staticMode = false;
+			graph.staticMode = true;
+			graph.Pause();
 			graph.AddMaxParticles();
           
 			
@@ -262,7 +263,7 @@ namespace SignalingSample
 
 			if (e.Key == Keys.LeftButton)
 			{
-				//graph.Helper.NodeSelection();
+				graph.Helper.NodeSelection();
 			}
 		}
 
@@ -295,11 +296,6 @@ namespace SignalingSample
 			console.Update(gameTime);
 
 			graph.Camera.Update(gameTime);
-
-
-			//mouseDelta = Game.Mouse.Position - prevMousePos;
-			//prevMousePos = Game.Mouse.Position;
-
 		}
 
 		/// <summary>
